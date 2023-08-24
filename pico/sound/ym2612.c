@@ -1056,7 +1056,47 @@ static void chan_render_loop(chan_rend_context *ct, int *buffer, int length)
 	}
 }
 #else
-void chan_render_loop(chan_rend_context *ct, int *buffer, unsigned short length);
+
+#define chan_render_loop_declare_expand(algo) \
+	void chan_render_loop_algo ## algo ## _0_00(chan_rend_context *ct, int *buffer, int length); \
+	void chan_render_loop_algo ## algo ## _0_01(chan_rend_context *ct, int *buffer, int length); \
+	void chan_render_loop_algo ## algo ## _0_10(chan_rend_context *ct, int *buffer, int length); \
+	void chan_render_loop_algo ## algo ## _0_11(chan_rend_context *ct, int *buffer, int length); \
+	void chan_render_loop_algo ## algo ## _1_00(chan_rend_context *ct, int *buffer, int length); \
+	void chan_render_loop_algo ## algo ## _1_01(chan_rend_context *ct, int *buffer, int length); \
+	void chan_render_loop_algo ## algo ## _1_10(chan_rend_context *ct, int *buffer, int length); \
+	void chan_render_loop_algo ## algo ## _1_11(chan_rend_context *ct, int *buffer, int length); \
+
+chan_render_loop_declare_expand(0)
+chan_render_loop_declare_expand(1)
+chan_render_loop_declare_expand(2)
+chan_render_loop_declare_expand(3)
+chan_render_loop_declare_expand(4)
+chan_render_loop_declare_expand(5)
+chan_render_loop_declare_expand(6)
+chan_render_loop_declare_expand(7)
+
+#define chan_render_loop_expand(algo)			\
+	chan_render_loop_algo ## algo ## _0_00,		\
+	chan_render_loop_algo ## algo ## _0_01,		\
+	chan_render_loop_algo ## algo ## _0_10,		\
+	chan_render_loop_algo ## algo ## _0_11,		\
+	chan_render_loop_algo ## algo ## _1_00,		\
+	chan_render_loop_algo ## algo ## _1_01,		\
+	chan_render_loop_algo ## algo ## _1_10,		\
+	chan_render_loop_algo ## algo ## _1_11		\
+
+void (* chan_render_loop_ptr[8*2*4])(chan_rend_context *ct, int *buffer, int length) = 
+{
+	chan_render_loop_expand(0),
+	chan_render_loop_expand(1),
+	chan_render_loop_expand(2),
+	chan_render_loop_expand(3),
+	chan_render_loop_expand(4),
+	chan_render_loop_expand(5),
+	chan_render_loop_expand(6),
+	chan_render_loop_expand(7)
+};
 #endif
 
 static chan_rend_context crct;
@@ -1067,10 +1107,19 @@ static void chan_render_prep(void)
 	crct.lfo_inc = ym2612.OPN.lfo_inc;
 }
 
-static void chan_render_finish(void)
+static void chan_render_finish(int length)
 {
-	ym2612.OPN.eg_cnt = crct.eg_cnt;
+	// This is weird: because if the channels are all disabled, the timer will
+	// not be incremented.
+	ym2612.OPN.eg_cnt = crct.eg_cnt;		
 	ym2612.OPN.eg_timer = crct.eg_timer;
+	/*ym2612.OPN.eg_timer += ym2612.OPN.eg_timer_add * length;
+	while (ym2612.OPN.eg_timer > EG_TIMER_OVERFLOW)
+	{
+		ym2612.OPN.eg_timer -= EG_TIMER_OVERFLOW;
+		ym2612.OPN.eg_cnt++;		
+	}*/
+
 	g_lfo_ampm = crct.pack >> 16; // need_save
 	ym2612.OPN.lfo_cnt = crct.lfo_cnt;
 }
@@ -1078,6 +1127,9 @@ static void chan_render_finish(void)
 static int chan_render(int *buffer, int length, int c, UINT32 flags) // flags: stereo, ?, disabled, ?, pan_r, pan_l
 {
 	crct.CH = &ym2612.CH[c];
+	if (!(crct.CH->SLOT[SLOT1].state | crct.CH->SLOT[SLOT2].state | crct.CH->SLOT[SLOT3].state | crct.CH->SLOT[SLOT4].state))
+		return;
+	
 	crct.mem = crct.CH->mem_value;		/* one sample delay memory */
 	crct.lfo_cnt = ym2612.OPN.lfo_cnt;
 
@@ -1157,7 +1209,17 @@ static int chan_render(int *buffer, int length, int c, UINT32 flags) // flags: s
 		crct.incr4 = crct.CH->SLOT[SLOT4].Incr;
 	}
 
+#if !defined(_ASM_YM2612_C) || defined(EXTERNAL_YM2612)
 	chan_render_loop(&crct, buffer, length);
+#else
+	//int disabled = (crct.pack & 4) ? 1 : 0;	// we are never disabled!
+	int disabled = 0;
+	int algo = crct.algo;
+	int pan_l = (crct.pack & 0x20) ? 1 : 0;
+	int pan_r = (crct.pack & 0x10) ? 1 : 0;
+	chan_render_loop_ptr[algo * 8 + disabled * 4 + pan_l * 2 + pan_r](&crct, buffer, length);
+
+#endif
 
 	crct.CH->op1_out = crct.op1_out;
 	crct.CH->mem_value = crct.mem;
@@ -1606,7 +1668,7 @@ int YM2612UpdateOne_(int *buffer, int length, int stereo, int is_buf_empty)
 	/* refresh PG and EG */
 	refresh_fc_eg_chan( &ym2612.CH[0] );
 	refresh_fc_eg_chan( &ym2612.CH[1] );
-	if( (ym2612.OPN.ST.mode & 0xc0) )
+	if( (ym2612.OPN.ST.mode_internal & 0xc0) )
 		/* 3SLOT MODE */
 		refresh_fc_eg_chan_sl3();
 	else
@@ -1627,7 +1689,7 @@ int YM2612UpdateOne_(int *buffer, int length, int stereo, int is_buf_empty)
 	if (ym2612.slot_mask & 0x00f000) active_chs |= chan_render(buffer, length, 3, stereo|((pan&0x0c0)>>2)) << 3;
 	if (ym2612.slot_mask & 0x0f0000) active_chs |= chan_render(buffer, length, 4, stereo|((pan&0x300)>>4)) << 4;
 	if (ym2612.slot_mask & 0xf00000) active_chs |= chan_render(buffer, length, 5, stereo|((pan&0xc00)>>6)|(ym2612.dacen<<2)) << 5;
-	chan_render_finish();
+	chan_render_finish(length);
 
 	return active_chs; // 1 if buffer updated
 }
@@ -1681,6 +1743,11 @@ void YM2612ResetChip_(void)
 	ym2612.dacen = 0;
 	ym2612.dacout = 0;
 	ym2612.addr_A1 = 0;
+
+	// for 3DS
+	ym2612.OPN.ST.address_internal = 0;
+	ym2612.OPN.ST.mode_internal = 0;
+	ym2612.addr_A1_internal = 0;
 }
 
 
@@ -1697,14 +1764,16 @@ int YM2612Write_(unsigned int a, unsigned int v)
 	switch( a & 3 ){
 	case 0:	/* address port 0 */
 	case 2:	/* address port 1 */
-		ym2612.OPN.ST.address = v;
-		ym2612.addr_A1 = (a & 2) >> 1;
+		//ym2612.OPN.ST.address = v;
+		ym2612.OPN.ST.address_internal = v;		/* For 3DS's execution in the 2nd core */
+		ym2612.addr_A1_internal = (a & 2) >> 1;
 		ret = 0;
 		break;
 
 	case 1:
 	case 3:	/* data port */
-		addr = ym2612.OPN.ST.address | ((int)ym2612.addr_A1 << 8);
+		//addr = ym2612.OPN.ST.address | ((int)ym2612.addr_A1 << 8);
+		addr = ym2612.OPN.ST.address_internal | ((int)ym2612.addr_A1_internal << 8);	/* For 3DS's execution in the 2nd core */
 
 		switch( addr & 0x1f0 )
 		{
@@ -1755,7 +1824,8 @@ int YM2612Write_(unsigned int a, unsigned int v)
 				break;
 #endif
 			case 0x27:	/* mode, timer control */
-				set_timers( v );
+				//set_timers( v );
+				ym2612.OPN.ST.mode_internal = v;
 				ret=0;
 				break;
 			case 0x28:	/* key on / off */
@@ -2001,6 +2071,11 @@ int YM2612PicoStateLoad2(int *tat, int *tbt)
 		ym2612.OPN.SL3.kcode[c]= (blk<<2) | opn_fktable[fn >> 7];
 		ym2612.OPN.SL3.fc[c] = fn_table[fn*2]>>(7-blk);
 	}
+
+	// For 3DS
+	ym2612.OPN.ST.address_internal = ym2612.OPN.ST.address;
+	ym2612.OPN.ST.mode_internal = ym2612.OPN.ST.mode;
+	ym2612.addr_A1_internal = ym2612.addr_A1;
 
 	return 0;
 }

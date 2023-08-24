@@ -14,23 +14,11 @@
 #include <unistd.h>
 #endif
 
-#include "../libpicofe/posix.h"
-#include "../libpicofe/input.h"
-#include "../libpicofe/fonts.h"
-#include "../libpicofe/sndout.h"
-#include "../libpicofe/lprintf.h"
-#include "../libpicofe/plat.h"
 #include "emu.h"
 #include "input_pico.h"
-#include "menu_pico.h"
-#include "config_file.h"
 
 #include <pico/pico_int.h>
 #include <pico/patch.h>
-
-#if defined(__GNUC__) && __GNUC__ >= 7
-#pragma GCC diagnostic ignored "-Wformat-truncation"
-#endif
 
 #ifndef _WIN32
 #define PATH_SEP      "/"
@@ -46,7 +34,6 @@ void *g_screen_ptr;
 
 int g_screen_width  = 320;
 int g_screen_height = 240;
-int g_screen_ppitch = 320; // pitch in pixels
 
 const char *PicoConfigFile = "config2.cfg";
 currentConfig_t currentConfig, defaultConfig;
@@ -140,19 +127,6 @@ static void romfname_ext(char *dst, int dstlen, const char *prefix, const char *
 
 void emu_status_msg(const char *format, ...)
 {
-	va_list vl;
-	int ret;
-
-	va_start(vl, format);
-	ret = vsnprintf(noticeMsg, sizeof(noticeMsg), format, vl);
-	va_end(vl);
-
-	/* be sure old text gets overwritten */
-	for (; ret < 28; ret++)
-		noticeMsg[ret] = ' ';
-	noticeMsg[ret] = 0;
-
-	notice_msg_time = plat_get_ticks_ms();
 }
 
 static const char * const biosfiles_us[] = {
@@ -358,7 +332,7 @@ static void do_region_override(const char *media_fname)
 int emu_reload_rom(const char *rom_fname_in)
 {
 	// use setting before rom config is loaded
-	int autoload = g_autostateld_opt;
+	int autoload = 1;
 	char *rom_fname = NULL;
 	char ext[5];
 	enum media_type_e media_type;
@@ -374,7 +348,7 @@ int emu_reload_rom(const char *rom_fname_in)
 
 	get_ext(rom_fname, ext);
 
-	// early cleanup
+	// early cleanup 
 	PicoPatchUnload();
 	if (movie_data) {
 		free(movie_data);
@@ -709,40 +683,6 @@ int emu_write_config(int is_game)
 }
 
 
-/* always using built-in font */
-
-#define mk_text_out(name, type, val, topleft, step_x, step_y) \
-void name(int x, int y, const char *text)				\
-{									\
-	int i, l, len = strlen(text);					\
-	type *screen = (type *)(topleft) + x * step_x + y * step_y;	\
-									\
-	for (i = 0; i < len; i++, screen += 8 * step_x)			\
-	{								\
-		for (l = 0; l < 8; l++)					\
-		{							\
-			unsigned char fd = fontdata8x8[text[i] * 8 + l];\
-			type *s = screen + l * step_y;			\
-			if (fd&0x80) s[step_x * 0] = val;		\
-			if (fd&0x40) s[step_x * 1] = val;		\
-			if (fd&0x20) s[step_x * 2] = val;		\
-			if (fd&0x10) s[step_x * 3] = val;		\
-			if (fd&0x08) s[step_x * 4] = val;		\
-			if (fd&0x04) s[step_x * 5] = val;		\
-			if (fd&0x02) s[step_x * 6] = val;		\
-			if (fd&0x01) s[step_x * 7] = val;		\
-		}							\
-	}								\
-}
-
-mk_text_out(emu_text_out8,      unsigned char,    0xf0, g_screen_ptr, 1, g_screen_ppitch)
-mk_text_out(emu_text_out16,     unsigned short, 0xffff, g_screen_ptr, 1, g_screen_ppitch)
-mk_text_out(emu_text_out8_rot,  unsigned char,    0xf0,
-	(char *)g_screen_ptr  + (g_screen_ppitch - 1) * g_screen_height, -g_screen_height, 1)
-mk_text_out(emu_text_out16_rot, unsigned short, 0xffff,
-	(short *)g_screen_ptr + (g_screen_ppitch - 1) * g_screen_height, -g_screen_height, 1)
-
-#undef mk_text_out
 
 void emu_osd_text16(int x, int y, const char *text)
 {
@@ -756,7 +696,7 @@ void emu_osd_text16(int x, int y, const char *text)
 	for (h = 0; h < 8; h++) {
 		unsigned short *p;
 		p = (unsigned short *)g_screen_ptr
-			+ x + g_screen_ppitch * (y + h);
+			+ x + g_screen_width * (y + h);
 		for (i = len; i > 0; i--, p++)
 			*p = (*p >> 2) & 0x39e7;
 	}
@@ -792,15 +732,15 @@ static void update_movie(void)
 
 static int try_ropen_file(const char *fname, int *time)
 {
-	struct stat st;
+	//struct stat st;
 	FILE *f;
 
 	f = fopen(fname, "rb");
 	if (f) {
 		if (time != NULL) {
 			*time = 0;
-			if (fstat(fileno(f), &st) == 0)
-				*time = (int)st.st_mtime;
+			//if (fstat(fileno(f), &st) == 0)
+			//	*time = (int)st.st_mtime;
 		}
 		fclose(f);
 		return 1;
@@ -1087,115 +1027,7 @@ static void do_turbo(unsigned short *pad, int acts)
 	*pad |= turbo_pad & (acts >> 8);
 }
 
-static void run_events_ui(unsigned int which)
-{
-	if (which & (PEV_STATE_LOAD|PEV_STATE_SAVE))
-	{
-		int do_it = 1;
-		if ( emu_check_save_file(state_slot, NULL) &&
-			(((which & PEV_STATE_LOAD) && (currentConfig.confirm_save & EOPT_CONFIRM_LOAD)) ||
-			 ((which & PEV_STATE_SAVE) && (currentConfig.confirm_save & EOPT_CONFIRM_SAVE))) )
-		{
-			const char *nm;
-			char tmp[64];
-			int keys, len;
 
-			strcpy(tmp, (which & PEV_STATE_LOAD) ? "LOAD STATE? " : "OVERWRITE SAVE? ");
-			len = strlen(tmp);
-			nm = in_get_key_name(-1, -PBTN_MOK);
-			snprintf(tmp + len, sizeof(tmp) - len, "(%s=yes, ", nm);
-			len = strlen(tmp);
-			nm = in_get_key_name(-1, -PBTN_MBACK);
-			snprintf(tmp + len, sizeof(tmp) - len, "%s=no)", nm);
-
-			plat_status_msg_busy_first(tmp);
-
-			in_set_config_int(0, IN_CFG_BLOCKING, 1);
-			while (in_menu_wait_any(NULL, 50) & (PBTN_MOK | PBTN_MBACK))
-				;
-			while ( !((keys = in_menu_wait_any(NULL, 50)) & (PBTN_MOK | PBTN_MBACK)))
-				;
-			if (keys & PBTN_MBACK)
-				do_it = 0;
-			while (in_menu_wait_any(NULL, 50) & (PBTN_MOK | PBTN_MBACK))
-				;
-			in_set_config_int(0, IN_CFG_BLOCKING, 0);
-		}
-		if (do_it) {
-			plat_status_msg_busy_first((which & PEV_STATE_LOAD) ? "LOADING STATE" : "SAVING STATE");
-			PicoStateProgressCB = plat_status_msg_busy_next;
-			emu_save_load_game((which & PEV_STATE_LOAD) ? 1 : 0, 0);
-			PicoStateProgressCB = NULL;
-		}
-	}
-	if (which & PEV_SWITCH_RND)
-	{
-		plat_video_toggle_renderer(1, 0);
-	}
-	if (which & (PEV_SSLOT_PREV|PEV_SSLOT_NEXT))
-	{
-		if (which & PEV_SSLOT_PREV) {
-			state_slot -= 1;
-			if (state_slot < 0)
-				state_slot = 9;
-		} else {
-			state_slot += 1;
-			if (state_slot > 9)
-				state_slot = 0;
-		}
-
-		emu_status_msg("SAVE SLOT %i [%s]", state_slot,
-			emu_check_save_file(state_slot, NULL) ? "USED" : "FREE");
-	}
-	if (which & PEV_RESET)
-		emu_reset_game();
-	if (which & PEV_MENU)
-		engineState = PGS_Menu;
-}
-
-void emu_update_input(void)
-{
-	static int prev_events = 0;
-	int actions[IN_BINDTYPE_COUNT] = { 0, };
-	int pl_actions[2];
-	int events;
-
-	in_update(actions);
-
-	pl_actions[0] = actions[IN_BINDTYPE_PLAYER12];
-	pl_actions[1] = actions[IN_BINDTYPE_PLAYER12] >> 16;
-
-	PicoIn.pad[0] = pl_actions[0] & 0xfff;
-	PicoIn.pad[1] = pl_actions[1] & 0xfff;
-
-	if (pl_actions[0] & 0x7000)
-		do_turbo(&PicoIn.pad[0], pl_actions[0]);
-	if (pl_actions[1] & 0x7000)
-		do_turbo(&PicoIn.pad[1], pl_actions[1]);
-
-	events = actions[IN_BINDTYPE_EMU] & PEV_MASK;
-
-	// volume is treated in special way and triggered every frame
-	if (events & (PEV_VOL_DOWN|PEV_VOL_UP))
-		plat_update_volume(1, events & PEV_VOL_UP);
-
-	if ((events ^ prev_events) & PEV_FF) {
-		emu_set_fastforward(events & PEV_FF);
-		plat_update_volume(0, 0);
-		reset_timing = 1;
-	}
-
-	events &= ~prev_events;
-
-	if (PicoIn.AHW == PAHW_PICO)
-		run_events_pico(events);
-	if (events)
-		run_events_ui(events);
-	if (movie_data)
-		update_movie();
-
-	prev_events = actions[IN_BINDTYPE_EMU] & PEV_MASK;
-}
 
 static void mkdir_path(char *path_with_reserve, int pos, const char *name)
 {
@@ -1209,11 +1041,8 @@ static void mkdir_path(char *path_with_reserve, int pos, const char *name)
 void emu_cmn_forced_frame(int no_scale, int do_emu)
 {
 	int po_old = PicoIn.opt;
-	int y;
 
-	for (y = 0; y < g_screen_height; y++)
-		memset32((short *)g_screen_ptr + g_screen_ppitch * y, 0,
-			 g_screen_width * 2 / 4);
+	memset32(g_screen_ptr, 0, g_screen_width * g_screen_height * 2 / 4);
 
 	PicoIn.opt &= ~POPT_ALT_RENDERER;
 	PicoIn.opt |= POPT_ACC_SPRITES;
@@ -1532,3 +1361,5 @@ void emu_loop(void)
 	pemu_loop_end();
 	emu_sound_stop();
 }
+
+

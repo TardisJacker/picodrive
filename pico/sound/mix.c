@@ -15,7 +15,7 @@
 	else if ( val < min ) val = min; \
 }
 
-
+/*
 void mix_32_to_16l_stereo(short *dest, int *src, int count)
 {
 	int l, r;
@@ -77,3 +77,4 @@ void mix_16h_to_32_s2(int *dest_buf, short *mp3_buf, int count)
 	}
 }
 
+*/

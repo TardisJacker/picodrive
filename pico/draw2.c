@@ -20,13 +20,14 @@
 #define LINE_WIDTH 328
 #endif
 
-static unsigned char PicoDraw2FB_[(8+320) * (8+240+8)];
+unsigned char PicoDraw2FB[(8+320) * (8+240+8)];
 
 static int HighCache2A[41*(TILE_ROWS+1)+1+1]; // caches for high layers
 static int HighCache2B[41*(TILE_ROWS+1)+1+1];
 
 unsigned short *PicoCramHigh=PicoMem.cram; // pointer to CRAM buff (0x40 shorts), converted to native device color (works only with 16bit for now)
-void (*PicoPrepareCram)(void)=0;           // prepares PicoCramHigh for renderer to use
+void (*PicoPrepareCram)()=0;            // prepares PicoCramHigh for renderer to use
+
 
 // stuff available in asm:
 #ifdef _ASM_DRAW_C
@@ -607,7 +608,7 @@ static void DrawDisplayFull(void)
 }
 
 
-PICO_INTERNAL void PicoFrameFull(void)
+PICO_INTERNAL void PicoFrameFull()
 {
 	pprof_start(draw);
 
@@ -624,5 +625,5 @@ PICO_INTERNAL void PicoFrameFull(void)
 
 void PicoDraw2Init(void)
 {
-	Pico.est.Draw2FB = PicoDraw2FB_;
+	Pico.est.Draw2FB = PicoDraw2FB;
 }

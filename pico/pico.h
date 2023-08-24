@@ -100,6 +100,9 @@ typedef struct
 
 	int sndRate;                   // rate in Hz
 	short *sndOut;                 // PCM output buffer
+	int sndVolumeMul;              // volume multiplier (3DS)
+	int lowPassFilter;             // enable low pass filter (3DS)
+	
 	void (*writeSound)(int len);   // write .sndOut callback, called once per frame
 
 	void (*osdMessage)(const char *msg); // output OSD message from emu, optional
@@ -197,6 +200,7 @@ void PicoDoHighPal555(int sh, int line, struct PicoEState *est);
 // internals
 #define PDRAW_SPRITES_MOVED (1<<0) // (asm)
 #define PDRAW_WND_DIFF_PRIO (1<<1) // not all window tiles use same priority
+#define PDRAW_SPR_LO_ON_HI  (1<<2) // seen sprites without layer pri bit ontop spr. with that bit
 #define PDRAW_INTERLACE     (1<<3)
 #define PDRAW_DIRTY_SPRITES (1<<4) // (asm)
 #define PDRAW_SONIC_MODE    (1<<5) // mid-frame palette changes for 8bit renderer
@@ -213,7 +217,7 @@ void PicoDrawSetInternalBuf(void *dest, int line_increment);
 // draw2.c
 // stuff below is optional
 extern unsigned short *PicoCramHigh; // pointer to CRAM buff (0x40 shorts), converted to native device color (works only with 16bit for now)
-extern void (*PicoPrepareCram)(void); // prepares PicoCramHigh for renderer to use
+extern void (*PicoPrepareCram)();    // prepares PicoCramHigh for renderer to use
 
 // pico.c (32x)
 #ifndef NO_32X

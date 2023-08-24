@@ -9,9 +9,10 @@
 
 #include "pico_int.h"
 #include "../cpu/debug.h"
-#include "../unzip/unzip.h"
-#include <zlib.h>
+//#include "../unzip/unzip.h"
+//#include <zlib.h>
 
+#include "3dsdbg.h"
 
 static int rom_alloc_size;
 static const char *rom_exts[] = { "bin", "gen", "smd", "iso", "sms", "gg", "sg" };
@@ -49,6 +50,7 @@ typedef struct _cso_struct
 }
 cso_struct;
 
+/*
 static int uncompress_buf(void *dest, int destLen, void *source, int sourceLen)
 {
     z_stream stream;
@@ -74,6 +76,7 @@ static int uncompress_buf(void *dest, int destLen, void *source, int sourceLen)
 
     return inflateEnd(&stream);
 }
+*/
 
 static const char *get_ext(const char *path)
 {
@@ -89,6 +92,7 @@ static const char *get_ext(const char *path)
   return ext;
 }
 
+/*
 struct zip_file {
   pm_file file;
   ZIP *zip;
@@ -98,6 +102,7 @@ struct zip_file {
   long start;
   unsigned int pos;
 };
+*/
 
 pm_file *pm_open(const char *path)
 {
@@ -109,6 +114,8 @@ pm_file *pm_open(const char *path)
     return NULL;
 
   ext = get_ext(path);
+
+  /*
   if (strcasecmp(ext, "zip") == 0)
   {
     struct zip_file *zfile = NULL;
@@ -119,7 +126,7 @@ pm_file *pm_open(const char *path)
     zipfile = openzip(path);
     if (zipfile != NULL)
     {
-      /* search for suitable file (right extension or large enough file) */
+      // search for suitable file (right extension or large enough file) 
       while ((zipentry = readzip(zipfile)) != NULL)
       {
         ext = get_ext(zipentry->name);
@@ -132,7 +139,7 @@ pm_file *pm_open(const char *path)
             goto found_rom_zip;
       }
 
-      /* zipfile given, but nothing found suitable for us inside */
+      // zipfile given, but nothing found suitable for us inside 
       goto zip_failed;
 
 found_rom_zip:
@@ -162,7 +169,8 @@ zip_failed:
       return NULL;
     }
   }
-  else if (strcasecmp(ext, "cso") == 0)
+  else*/ 
+  if (strcasecmp(ext, "cso") == 0)
   {
     cso_struct *cso = NULL, *tmp = NULL;
     int size;
@@ -257,7 +265,7 @@ size_t pm_read(void *ptr, size_t bytes, pm_file *stream)
   {
     ret = fread(ptr, 1, bytes, stream->file);
   }
-  else if (stream->type == PMT_ZIP)
+  /*else if (stream->type == PMT_ZIP)
   {
     struct zip_file *z = stream->file;
 
@@ -287,7 +295,9 @@ size_t pm_read(void *ptr, size_t bytes, pm_file *stream)
     z->pos += bytes - z->stream.avail_out;
     return bytes - z->stream.avail_out;
   }
-  else if (stream->type == PMT_CSO)
+  else*/
+  /*
+  if (stream->type == PMT_CSO)
   {
     cso_struct *cso = stream->param;
     int read_pos, read_len, out_offs, rret;
@@ -348,7 +358,7 @@ size_t pm_read(void *ptr, size_t bytes, pm_file *stream)
       index = index_end;
       index_end = cso->index[block+1];
     }
-  }
+  }*/
   else
     ret = 0;
 
@@ -362,7 +372,7 @@ int pm_seek(pm_file *stream, long offset, int whence)
     fseek(stream->file, offset, whence);
     return ftell(stream->file);
   }
-  else if (stream->type == PMT_ZIP)
+  /*else if (stream->type == PMT_ZIP)
   {
     struct zip_file *z = stream->file;
     unsigned int pos = z->pos;
@@ -404,7 +414,8 @@ int pm_seek(pm_file *stream, long offset, int whence)
     }
     return z->pos;
   }
-  else if (stream->type == PMT_CSO)
+  else*/ 
+  if (stream->type == PMT_CSO)
   {
     cso_struct *cso = stream->param;
     switch (whence)
@@ -429,13 +440,14 @@ int pm_close(pm_file *fp)
   {
     fclose(fp->file);
   }
-  else if (fp->type == PMT_ZIP)
+  /*else if (fp->type == PMT_ZIP)
   {
     struct zip_file *z = fp->file;
     inflateEnd(&z->stream);
     closezip(z->zip);
   }
-  else if (fp->type == PMT_CSO)
+  else*/ 
+  if (fp->type == PMT_CSO)
   {
     free(fp->param);
     fclose(fp->file);
@@ -778,8 +790,7 @@ static int is_expr(const char *expr, char **pr)
 
 #include "carthw_cfg.c"
 
-static void parse_carthw(const char *carthw_cfg, int *fill_sram,
-  int *hw_detected)
+static void parse_carthw(const char *carthw_cfg, int *fill_sram)
 {
   int line = 0, any_checks_passed = 0, skip_sect = 0;
   const char *s, *builtin = builtin_carthw_cfg;
@@ -903,7 +914,6 @@ static void parse_carthw(const char *carthw_cfg, int *fill_sram,
     if (is_expr("hw", &p)) {
       if (!any_checks_passed)
         goto no_checks;
-      *hw_detected = 1;
       rstrip(p);
 
       if      (strcmp(p, "svp") == 0)
@@ -927,7 +937,6 @@ static void parse_carthw(const char *carthw_cfg, int *fill_sram,
       else {
         elprintf(EL_STATUS, "carthw:%d: unsupported mapper: %s", line, p);
         skip_sect = 1;
-        *hw_detected = 0;
       }
       continue;
     }
@@ -1041,7 +1050,6 @@ no_checks:
  */
 static void PicoCartDetect(const char *carthw_cfg)
 {
-  int carthw_detected = 0;
   int fill_sram = 0;
 
   memset(&Pico.sv, 0, sizeof(Pico.sv));
@@ -1071,11 +1079,7 @@ static void PicoCartDetect(const char *carthw_cfg)
   Pico.sv.eeprom_bit_out= 0;
 
   if (carthw_cfg != NULL)
-    parse_carthw(carthw_cfg, &fill_sram, &carthw_detected);
-
-  // assume the standard mapper for large roms
-  if (!carthw_detected && Pico.romsize > 0x400000)
-    carthw_ssf2_startup();
+    parse_carthw(carthw_cfg, &fill_sram);
 
   if (Pico.sv.flags & SRF_ENABLED)
   {

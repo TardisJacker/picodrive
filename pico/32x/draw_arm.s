@@ -27,6 +27,7 @@ Pico32xNativePal:
     ldr     r4, =PicoScan32xBegin
     ldr     r5, =PicoScan32xEnd
     ldr     r6, =DrawLineDest
+    
     ldr     r4, [r4]
     ldr     r5, [r5]
     stmfd   sp!, {r4,r5,r6}
@@ -72,9 +73,11 @@ Pico32xNativePal:
 
     ldr     r10,=Pico32x
     ldr     r11,=PicoDraw2FB
+
     ldr     r10,[r10, #0x40] @ Pico32x.vdp_regs[0]
-    ldr     r11,[r11]
+    @ldr     r11,[r11]       @ ??
     ldr     r9, =HighPal     @ palmd
+    ldr     r9, [r9]
     and     r4, r2, #0xff
     mov     r5, #328
     lsl     r3, #26          @ mdbg << 26
@@ -90,6 +93,7 @@ Pico32xNativePal:
 0: @ loop_outer:
     call_scan_end \call_scan
     add     r4, r4, #1
+    add     r0, r0, #384     @ dst += 1024 - 320 * 2 (for 3DS build only)
     sub     r11,r11,#1       @ adjust for prev read
     cmp     r4, r2, lsr #16
     call_scan_fin_ge \call_scan
@@ -116,6 +120,9 @@ Pico32xNativePal:
     mov     r7, r7, lsl #1
     ldreqh  r12,[r9, r7]
     streqh  r12,[r0], #2     @ *dst++ = palmd[*pmd]
+.else
+    mov     r12, #0
+    streqh  r12,[r0], #2     @ bug fix?? Fixes Blackthorne
 .endif
     beq     2b @ loop_inner
 
@@ -141,9 +148,11 @@ Pico32xNativePal:
 
     ldr     r11,=PicoDraw2FB
     ldr     r10,=Pico32xNativePal
-    ldr     r11,[r11]
-    ldr     r10,[r10]
+    
+    @ldr     r11,[r11]         @??
+    ldr     r10,[r10]        
     ldr     r9, =HighPal     @ palmd
+    ldr     r9, [r9]
     and     r4, r2, #0xff
     mov     r5, #328
     lsl     r3, #26          @ mdbg << 26
@@ -156,6 +165,7 @@ Pico32xNativePal:
 0: @ loop_outer:
     call_scan_end \call_scan
     add     r4, r4, #1
+    add     r0, r0, #384     @ dst += 1024 - 320 * 2 (for 3DS build only)
     cmp     r4, r2, lsr #16
     call_scan_fin_ge \call_scan
     ldmgefd sp!, {r4-r11,pc}
@@ -299,9 +309,10 @@ Pico32xNativePal:
 
     ldr     r11,=PicoDraw2FB
     ldr     r10,=Pico32xNativePal
-    ldr     r11,[r11]
-    ldr     r10,[r10]
+    @ldr     r11,[r11]      @??
+    ldr     r10,[r10]     
     ldr     r9, =HighPal     @ palmd
+    ldr     r9, [r9]
     and     r4, r2, #0xff
     mov     r5, #328
     lsl     r3, #26          @ mdbg << 26
@@ -314,6 +325,7 @@ Pico32xNativePal:
 0: @ loop_outer:
     call_scan_end \call_scan
     add     r4, r4, #1
+    add     r0, r0, #384     @ dst += 1024 - 320 * 2 (for 3DS build only)
     sub     r11,r11,#1       @ adjust for prev read
     cmp     r4, r2, lsr #16
     call_scan_fin_ge \call_scan

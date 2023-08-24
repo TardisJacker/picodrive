@@ -103,7 +103,7 @@ static unsigned int op_refs[0x10000];
 # define rlog2(...)
 #endif
 
-#include "sh2.c"
+#include "sh2.h"
 
 #ifndef DRC_CMP
 

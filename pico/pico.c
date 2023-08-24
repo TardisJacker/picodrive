@@ -166,6 +166,11 @@ int PicoReset(void)
   }
 
   SekReset();
+ 
+  // bug fix? without this, the jump table for the PicoCpuCS68k's jumptab is never initialized
+  // and the CPU slave emulation will crash when loading a state before the CD is initialized.
+  PicoCpuCS68k.jumptab = &CycloneJumpTab;
+
   // ..but do not reset SekCycle* to not desync with addons
 
   // s68k doesn't have the TAS quirk, so we just globally set normal TAS handler in MCD mode (used by Batman games).
@@ -267,7 +272,7 @@ PICO_INTERNAL int CheckDMA(void)
   return burn;
 }
 
-#include "pico_cmn.c"
+#include "pico_cmn.h"
 
 /* sync z80 to 68k */
 PICO_INTERNAL void PicoSyncZ80(unsigned int m68k_cycles_done)

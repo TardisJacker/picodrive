@@ -541,7 +541,7 @@ void sync_sh2s_lockstep(unsigned int m68k_target)
 
 #define PICO_32X
 #define PICO_CD
-#include "../pico_cmn.c"
+#include "../pico_cmn.h"
 
 void PicoFrame32x(void)
 {

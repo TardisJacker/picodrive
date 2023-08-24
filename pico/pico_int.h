@@ -11,6 +11,7 @@
 #define PICO_INTERNAL_INCLUDED
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "pico_port.h"
 #include "pico.h"
@@ -169,7 +170,7 @@ extern struct DrZ80 drZ80;
 #define z80_run(cycles)    ((cycles) - DrZ80Run(&drZ80, cycles))
 #define z80_run_nr(cycles) DrZ80Run(&drZ80, cycles)
 #define z80_int()          drZ80.Z80_IRQ = 1
-#define z80_int_assert(a)  drZ80.Z80_IRQ = (a)
+#define z80_int()          drZ80.Z80_IRQ = 1
 #define z80_nmi()          drZ80.Z80IF |= 8
 
 #define z80_cyclesLeft     drZ80.cycles
@@ -182,7 +183,6 @@ extern struct DrZ80 drZ80;
 #define z80_run(cycles)    Cz80_Exec(&CZ80, cycles)
 #define z80_run_nr(cycles) Cz80_Exec(&CZ80, cycles)
 #define z80_int()          Cz80_Set_IRQ(&CZ80, 0, HOLD_LINE)
-#define z80_int_assert(a)  Cz80_Set_IRQ(&CZ80, 0, (a) ? ASSERT_LINE : CLEAR_LINE)
 #define z80_nmi()          Cz80_Set_IRQ(&CZ80, IRQ_LINE_NMI, 0)
 
 #define z80_cyclesLeft     (CZ80.ICount - CZ80.ExtraCycles)
@@ -194,7 +194,6 @@ extern struct DrZ80 drZ80;
 #define z80_run(cycles)    (cycles)
 #define z80_run_nr(cycles)
 #define z80_int()
-#define z80_int_assert(a)
 #define z80_nmi()
 
 #endif
@@ -548,7 +547,6 @@ typedef struct
 #define P32XF_68KCPOLL   (1 << 0)
 #define P32XF_68KVPOLL   (1 << 1)
 #define P32XF_Z80_32X_IO (1 << 7) // z80 does 32x io
-#define P32XF_DRC_ROM_C  (1 << 8) // cached code from ROM
 
 #define P32XI_VRES (1 << 14/2) // IRL/2
 #define P32XI_VINT (1 << 12/2)
@@ -657,7 +655,7 @@ extern int DrawLineDestIncrement;
 
 // draw2.c
 void PicoDraw2Init(void);
-PICO_INTERNAL void PicoFrameFull(void);
+PICO_INTERNAL void PicoFrameFull();
 
 // mode4.c
 void PicoFrameStartMode4(void);
@@ -862,6 +860,8 @@ PICO_INTERNAL void PsndDoPSG(int line_to);
 PICO_INTERNAL void PsndClear(void);
 PICO_INTERNAL void PsndGetSamples(int y);
 PICO_INTERNAL void PsndGetSamplesMS(void);
+int PsndRender3DS(short *leftBuffer, short *rightBuffer, int length);
+
 
 // sms.c
 #ifndef NO_SMS
@@ -917,7 +917,6 @@ void PicoWrite16_32x(unsigned int a, unsigned int d);
 void PicoMemSetup32x(void);
 void Pico32xSwapDRAM(int b);
 void Pico32xMemStateLoaded(void);
-void p32x_update_banks(void);
 void p32x_m68k_poll_event(unsigned int flags);
 void p32x_sh2_poll_event(SH2 *sh2, unsigned int flags, unsigned int m68k_cycles);
 

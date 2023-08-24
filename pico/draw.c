@@ -13,19 +13,20 @@
  * - "sonic mode" for midline palette changes (8bit mode only)
  * - accurate sprites (AS) [+ s/h]
  *
- * s/h uses upper bits for both priority and shadow/hilight flags.
+ * AS and s/h both use upper bits for both priority and shadow/hilight flags.
  * "sonic mode" is autodetected, shadow/hilight is enabled by emulated game.
  * AS is enabled by user and takes priority over "sonic mode".
  *
  * since renderer always draws line in 8bit mode, there are 2 spare bits:
- * b \ mode: s/h             sonic
- * 00        normal          pal index
- * 01        shadow          pal index
- * 10        hilight+op spr  pal index
- * 11        shadow +op spr  pal index
+ * b \ mode: s/h             as        sonic
+ * 00        normal          -         pal index
+ * 01        shadow          -         pal index
+ * 10        hilight+op spr  spr       pal index
+ * 11        shadow +op spr  -         pal index
  *
  * not handled properly:
  * - hilight op on shadow tile
+ * - AS + s/h (s/h sprite flag interferes with and cleared by AS code)
  */
 
 #include "pico_int.h"
@@ -94,8 +95,11 @@ void blockcpy_or(void *dst, void *src, size_t n, int pat)
 #define blockcpy memcpy
 #endif
 
-#define TileNormMaker_(pix_func)                             \
+
+#define TileNormMaker(funcname,pix_func)                     \
+static void funcname(int sx, unsigned int pack, int pal)     \
 {                                                            \
+  unsigned char *pd = Pico.est.HighCol + sx;                 \
   unsigned int t;                                            \
                                                              \
   t = (pack&0x0000f000)>>12; pix_func(0);                    \
@@ -108,8 +112,10 @@ void blockcpy_or(void *dst, void *src, size_t n, int pat)
   t = (pack&0x000f0000)>>16; pix_func(7);                    \
 }
 
-#define TileFlipMaker_(pix_func)                             \
+#define TileFlipMaker(funcname,pix_func)                     \
+static void funcname(int sx, unsigned int pack, int pal)     \
 {                                                            \
+  unsigned char *pd = Pico.est.HighCol + sx;                 \
   unsigned int t;                                            \
                                                              \
   t = (pack&0x000f0000)>>16; pix_func(0);                    \
@@ -122,21 +128,6 @@ void blockcpy_or(void *dst, void *src, size_t n, int pat)
   t = (pack&0x0000f000)>>12; pix_func(7);                    \
 }
 
-#define TileNormMaker(funcname, pix_func) \
-static void funcname(unsigned char *pd, unsigned int pack, int pal) \
-TileNormMaker_(pix_func)
-
-#define TileFlipMaker(funcname, pix_func) \
-static void funcname(unsigned char *pd, unsigned int pack, int pal) \
-TileFlipMaker_(pix_func)
-
-#define TileNormMakerAS(funcname, pix_func) \
-static void funcname(unsigned char *pd, unsigned char *mb, unsigned int pack, int pal) \
-TileNormMaker_(pix_func)
-
-#define TileFlipMakerAS(funcname, pix_func) \
-static void funcname(unsigned char *pd, unsigned char *mb, unsigned int pack, int pal) \
-TileFlipMaker_(pix_func)
 
 #define pix_just_write(x) \
   if (t) pd[x]=pal|t
@@ -164,14 +155,10 @@ TileFlipMaker(TileFlipSH, pix_sh)
 TileNormMaker(TileNormSH_markop, pix_sh_markop)
 TileFlipMaker(TileFlipSH_markop, pix_sh_markop)
 
-#endif
-
 // process operator pixels only, apply only on low pri tiles and other op pixels
 #define pix_sh_onlyop(x) \
   if (t>=0xe && (pd[x]&0xc0)) \
     pd[x]=(pd[x]&0x3f)|(t<<6); /* c0 shadow, 80 hilight */ \
-
-#ifndef _ASM_DRAW_C
 
 TileNormMaker(TileNormSH_onlyop_lp, pix_sh_onlyop)
 TileFlipMaker(TileFlipSH_onlyop_lp, pix_sh_onlyop)
@@ -180,39 +167,26 @@ TileFlipMaker(TileFlipSH_onlyop_lp, pix_sh_onlyop)
 
 // draw a sprite pixel (AS)
 #define pix_as(x) \
-  if (t & mb[x]) mb[x] = 0, pd[x] = pal | t
+  if (t && !(pd[x]&0x80)) pd[x]=pal|t
 
-TileNormMakerAS(TileNormAS, pix_as)
-TileFlipMakerAS(TileFlipAS, pix_as)
+TileNormMaker(TileNormAS, pix_as)
+TileFlipMaker(TileFlipAS, pix_as)
 
-// draw a sprite pixel, process operator colors (AS)
-#define pix_sh_as(x) \
-  if (t & mb[x]) { \
-    mb[x] = 0; \
-    if (t>=0xe) pd[x]=(pd[x]&0x3f)|(t<<6); /* c0 shadow, 80 hilight */ \
-    else pd[x] = pal | t; \
-  }
+// draw a sprite pixel, skip operator colors (AS)
+#define pix_sh_as_noop(x) \
+  if (t && t < 0xe && !(pd[x]&0x80)) pd[x]=pal|t
 
-TileNormMakerAS(TileNormSH_AS, pix_sh_as)
-TileFlipMakerAS(TileFlipSH_AS, pix_sh_as)
-
-#define pix_sh_as_onlyop(x) \
-  if (t & mb[x]) { \
-    mb[x] = 0; \
-    pix_sh_onlyop(x); \
-  }
-
-TileNormMakerAS(TileNormSH_AS_onlyop_lp, pix_sh_as_onlyop)
-TileFlipMakerAS(TileFlipSH_AS_onlyop_lp, pix_sh_as_onlyop)
+TileNormMaker(TileNormAS_noop, pix_sh_as_noop)
+TileFlipMaker(TileFlipAS_noop, pix_sh_as_noop)
 
 // mark pixel as sprite pixel (AS)
 #define pix_sh_as_onlymark(x) \
-  if (t) mb[x] = 0
+  if (t) pd[x]|=0x80
 
-TileNormMakerAS(TileNormAS_onlymark, pix_sh_as_onlymark)
-TileFlipMakerAS(TileFlipAS_onlymark, pix_sh_as_onlymark)
+TileNormMaker(TileNormAS_onlymark, pix_sh_as_onlymark)
+TileFlipMaker(TileFlipAS_onlymark, pix_sh_as_onlymark)
 
-// forced both layer draw (through debug reg)
+// mark pixel as sprite pixel (AS)
 #define pix_and(x) \
   pd[x] = (pd[x] & 0xc0) | (pd[x] & (pal | t))
 
@@ -224,7 +198,6 @@ TileFlipMaker(TileFlip_and, pix_and)
 #ifndef _ASM_DRAW_C
 static void DrawStrip(struct TileStrip *ts, int lflags, int cellskip)
 {
-  unsigned char *pd = Pico.est.HighCol;
   int tilex,dx,ty,code=0,addr=0,cells;
   int oldcode=-1,blank=-1; // The tile we know is blank
   int pal=0,sh;
@@ -268,8 +241,8 @@ static void DrawStrip(struct TileStrip *ts, int lflags, int cellskip)
       continue;
     }
 
-    if (code & 0x0800) TileFlip(pd + dx, pack, pal);
-    else               TileNorm(pd + dx, pack, pal);
+    if (code & 0x0800) TileFlip(dx, pack, pal);
+    else               TileNorm(dx, pack, pal);
   }
 
   // terminate the cache list
@@ -281,7 +254,6 @@ static void DrawStrip(struct TileStrip *ts, int lflags, int cellskip)
 // this is messy
 static void DrawStripVSRam(struct TileStrip *ts, int plane_sh, int cellskip)
 {
-  unsigned char *pd = Pico.est.HighCol;
   int tilex,dx,code=0,addr=0,cell=0;
   int oldcode=-1,blank=-1; // The tile we know is blank
   int pal=0,scan=Pico.est.DrawScanline;
@@ -338,8 +310,8 @@ static void DrawStripVSRam(struct TileStrip *ts, int plane_sh, int cellskip)
       continue;
     }
 
-    if (code & 0x0800) TileFlip(pd + dx, pack, pal);
-    else               TileNorm(pd + dx, pack, pal);
+    if (code & 0x0800) TileFlip(dx, pack, pal);
+    else               TileNorm(dx, pack, pal);
   }
 
   // terminate the cache list
@@ -353,7 +325,6 @@ static
 #endif
 void DrawStripInterlace(struct TileStrip *ts)
 {
-  unsigned char *pd = Pico.est.HighCol;
   int tilex=0,dx=0,ty=0,code=0,addr=0,cells;
   int oldcode=-1,blank=-1; // The tile we know is blank
   int pal=0;
@@ -395,8 +366,8 @@ void DrawStripInterlace(struct TileStrip *ts)
       continue;
     }
 
-    if (code & 0x0800) TileFlip(pd + dx, pack, pal);
-    else               TileNorm(pd + dx, pack, pal);
+    if (code & 0x0800) TileFlip(dx, pack, pal);
+    else               TileNorm(dx, pack, pal);
   }
 
   // terminate the cache list
@@ -411,7 +382,6 @@ static void DrawLayer(int plane_sh, int *hcache, int cellskip, int maxcells,
 {
   struct PicoVideo *pvid=&Pico.video;
   const char shift[4]={5,6,5,7}; // 32,64 or 128 sized tilemaps (2 is invalid)
-  const unsigned char h_masks[4] = { 0x00, 0x07, 0xf8, 0xff };
   struct TileStrip ts;
   int width, height, ymask;
   int vscroll, htab;
@@ -438,7 +408,8 @@ static void DrawLayer(int plane_sh, int *hcache, int cellskip, int maxcells,
   else            ts.nametab=(pvid->reg[2]&0x38)<< 9; // A
 
   htab=pvid->reg[13]<<9; // Horizontal scroll table address
-  htab+=(est->DrawScanline&h_masks[pvid->reg[11]&3])<<1; // Point to line (masked)
+  if ( pvid->reg[11]&2)     htab+=est->DrawScanline<<1; // Offset by line
+  if ((pvid->reg[11]&1)==0) htab&=~0xf; // Offset by tile
   htab+=plane_sh&1; // A or B
 
   // Get horizontal scroll value, will be masked later
@@ -476,8 +447,7 @@ static void DrawLayer(int plane_sh, int *hcache, int cellskip, int maxcells,
 static void DrawWindow(int tstart, int tend, int prio, int sh,
                        struct PicoEState *est)
 {
-  unsigned char *pd = Pico.est.HighCol;
-  struct PicoVideo *pvid = &Pico.video;
+  struct PicoVideo *pvid=&Pico.video;
   int tilex,ty,nametab,code=0;
   int blank=-1; // The tile we know is blank
 
@@ -534,8 +504,8 @@ static void DrawWindow(int tstart, int tend, int prio, int sh,
       pal = ((code >> 9) & 0x30);
       dx = 8 + (tilex << 3);
 
-      if (code & 0x0800) TileFlip(pd + dx, pack, pal);
-      else               TileNorm(pd + dx, pack, pal);
+      if (code & 0x0800) TileFlip(dx, pack, pal);
+      else               TileNorm(dx, pack, pal);
     }
   }
   else
@@ -575,8 +545,8 @@ static void DrawWindow(int tstart, int tend, int prio, int sh,
 
       dx = 8 + (tilex << 3);
 
-      if (code & 0x0800) TileFlip(pd + dx, pack, pal);
-      else               TileNorm(pd + dx, pack, pal);
+      if (code & 0x0800) TileFlip(dx, pack, pal);
+      else               TileNorm(dx, pack, pal);
     }
   }
 }
@@ -598,7 +568,6 @@ static void DrawTilesFromCacheShPrep(void)
 
 static void DrawTilesFromCache(int *hc, int sh, int rlim, struct PicoEState *est)
 {
-  unsigned char *pd = Pico.est.HighCol;
   int code, addr, dx;
   unsigned int pack;
   int pal;
@@ -633,8 +602,8 @@ static void DrawTilesFromCache(int *hc, int sh, int rlim, struct PicoEState *est
       if (rlim-dx < 0)
         goto last_cut_tile;
 
-      if (code & 0x0800) TileFlip(pd + dx, pack, pal);
-      else               TileNorm(pd + dx, pack, pal);
+      if (code & 0x0800) TileFlip(dx, pack, pal);
+      else               TileNorm(dx, pack, pal);
     }
   }
   else
@@ -658,8 +627,8 @@ static void DrawTilesFromCache(int *hc, int sh, int rlim, struct PicoEState *est
       if (rlim - dx < 0)
         goto last_cut_tile;
 
-      if (code & 0x0800) TileFlip(pd + dx, pack, pal);
-      else               TileNorm(pd + dx, pack, pal);
+      if (code & 0x0800) TileFlip(dx, pack, pal);
+      else               TileNorm(dx, pack, pal);
     }
   }
   return;
@@ -667,9 +636,9 @@ static void DrawTilesFromCache(int *hc, int sh, int rlim, struct PicoEState *est
 last_cut_tile:
   // for vertical window cutoff
   {
+    unsigned char *pd = est->HighCol + dx;
     unsigned int t;
 
-    pd += dx;
     if (code&0x0800)
     {
       switch (rlim-dx+8)
@@ -708,13 +677,12 @@ last_cut_tile:
 
 static void DrawSprite(int *sprite, int sh)
 {
-  void (*fTileFunc)(unsigned char *pd, unsigned int pack, int pal);
-  unsigned char *pd = Pico.est.HighCol;
   int width=0,height=0;
   int row=0,code=0;
   int pal;
   int tile=0,delta=0;
   int sx, sy;
+  void (*fTileFunc)(int sx, unsigned int pack, int pal);
 
   // parse the sprite data
   sy=sprite[0];
@@ -754,14 +722,13 @@ static void DrawSprite(int *sprite, int sh)
     if(sx>=328) break; // Offscreen
 
     pack = *(unsigned int *)(PicoMem.vram + (tile & 0x7fff));
-    fTileFunc(pd + sx, pack, pal);
+    fTileFunc(sx, pack, pal);
   }
 }
 #endif
 
 static NOINLINE void DrawTilesFromCacheForced(const int *hc)
 {
-  unsigned char *pd = Pico.est.HighCol;
   int code, addr, dx;
   unsigned int pack;
   int pal;
@@ -776,14 +743,13 @@ static NOINLINE void DrawTilesFromCacheForced(const int *hc)
     pal = ((code >> 9) & 0x30);
     pack = *(unsigned int *)(PicoMem.vram + addr);
 
-    if (code & 0x0800) TileFlip_and(pd + dx, pack, pal);
-    else               TileNorm_and(pd + dx, pack, pal);
+    if (code & 0x0800) TileFlip_and(dx, pack, pal);
+    else               TileNorm_and(dx, pack, pal);
   }
 }
 
 static void DrawSpriteInterlace(unsigned int *sprite)
 {
-  unsigned char *pd = Pico.est.HighCol;
   int width=0,height=0;
   int row=0,code=0;
   int pal;
@@ -822,8 +788,8 @@ static void DrawSpriteInterlace(unsigned int *sprite)
     if(sx>=328) break; // Offscreen
 
     pack = *(unsigned int *)(PicoMem.vram + (tile & 0x7fff));
-    if (code & 0x0800) TileFlip(pd + sx, pack, pal);
-    else               TileNorm(pd + sx, pack, pal);
+    if (code & 0x0800) TileFlip(sx, pack, pal);
+    else               TileNorm(sx, pack, pal);
   }
 }
 
@@ -885,8 +851,7 @@ static NOINLINE void DrawAllSpritesInterlace(int pri, int sh)
  */
 static void DrawSpritesSHi(unsigned char *sprited, const struct PicoEState *est)
 {
-  void (*fTileFunc)(unsigned char *pd, unsigned int pack, int pal);
-  unsigned char *pd = Pico.est.HighCol;
+  void (*fTileFunc)(int sx, unsigned int pack, int pal);
   unsigned char *p;
   int cnt;
 
@@ -948,7 +913,7 @@ static void DrawSpritesSHi(unsigned char *sprited, const struct PicoEState *est)
       if(sx>=328) break; // Offscreen
 
       pack = *(unsigned int *)(PicoMem.vram + (tile & 0x7fff));
-      fTileFunc(pd + sx, pack, pal);
+      fTileFunc(sx, pack, pal);
     }
   }
 }
@@ -956,17 +921,15 @@ static void DrawSpritesSHi(unsigned char *sprited, const struct PicoEState *est)
 
 static void DrawSpritesHiAS(unsigned char *sprited, int sh)
 {
-  void (*fTileFunc)(unsigned char *pd, unsigned char *mb,
-                    unsigned int pack, int pal);
-  unsigned char *pd = Pico.est.HighCol;
-  unsigned char mb[8+320+8];
+  void (*fTileFunc)(int sx, unsigned int pack, int pal);
   unsigned char *p;
-  int entry, cnt;
+  int entry, cnt, sh_cnt = 0;
 
   cnt = sprited[0] & 0x7f;
   if (cnt == 0) return;
 
-  memset(mb, 0xff, sizeof(mb));
+  Pico.est.rendstatus |= PDRAW_SPR_LO_ON_HI;
+
   p = &sprited[3];
 
   // Go through sprites:
@@ -980,26 +943,22 @@ static void DrawSpritesHiAS(unsigned char *sprited, int sh)
     code = sprite[1];
     pal = (code>>9)&0x30;
 
-    if (sh && pal == 0x30)
+    if (code & 0x8000) // hi priority
     {
-      if (code & 0x8000) // hi priority
+      if (sh && pal == 0x30)
       {
-        if (code&0x800) fTileFunc = TileFlipSH_AS;
-        else            fTileFunc = TileNormSH_AS;
+        if (code&0x800) fTileFunc=TileFlipAS_noop;
+        else            fTileFunc=TileNormAS_noop;
       } else {
-        if (code&0x800) fTileFunc = TileFlipSH_AS_onlyop_lp;
-        else            fTileFunc = TileNormSH_AS_onlyop_lp;
+        if (code&0x800) fTileFunc=TileFlipAS;
+        else            fTileFunc=TileNormAS;
       }
     } else {
-      if (code & 0x8000) // hi priority
-      {
-        if (code&0x800) fTileFunc = TileFlipAS;
-        else            fTileFunc = TileNormAS;
-      } else {
-        if (code&0x800) fTileFunc = TileFlipAS_onlymark;
-        else            fTileFunc = TileNormAS_onlymark;
-      }
+      if (code&0x800) fTileFunc=TileFlipAS_onlymark;
+      else            fTileFunc=TileNormAS_onlymark;
     }
+    if (sh && pal == 0x30)
+      p[sh_cnt++] = offs / 2; // re-save for sh/hi pass
 
     // parse remaining sprite data
     sy=sprite[0];
@@ -1019,6 +978,7 @@ static void DrawSpritesHiAS(unsigned char *sprited, int sh)
     tile &= 0x7ff; tile<<=4; tile+=(row&7)<<1; // Tile address
     delta<<=4; // Delta of address
 
+    pal |= 0x80;
     for (; width; width--,sx+=8,tile+=delta)
     {
       unsigned int pack;
@@ -1027,9 +987,25 @@ static void DrawSpritesHiAS(unsigned char *sprited, int sh)
       if(sx>=328) break; // Offscreen
 
       pack = *(unsigned int *)(PicoMem.vram + (tile & 0x7fff));
-      fTileFunc(pd + sx, mb + sx, pack, pal);
+      fTileFunc(sx, pack, pal);
     }
   }
+
+  if (!sh || !(sprited[1]&SPRL_MAY_HAVE_OP)) return;
+
+  /* nasty 1: remove 'sprite' flags */
+  {
+    int c = 320/4/4, *zb = (int *)(Pico.est.HighCol+8);
+    while (c--)
+    {
+      *zb++ &= 0x7f7f7f7f; *zb++ &= 0x7f7f7f7f;
+      *zb++ &= 0x7f7f7f7f; *zb++ &= 0x7f7f7f7f;
+    }
+  }
+
+  /* nasty 2: sh operator pass */
+  sprited[0] = sh_cnt;
+  DrawSpritesSHi(sprited, &Pico.est);
 }
 
 
@@ -1278,6 +1254,7 @@ void PicoDoHighPal555(int sh, int line, struct PicoEState *est)
   }
 }
 
+/*
 void FinalizeLine555(int sh, int line, struct PicoEState *est)
 {
   unsigned short *pd=est->DrawLineDest;
@@ -1296,15 +1273,53 @@ void FinalizeLine555(int sh, int line, struct PicoEState *est)
   }
 
   {
-#if 1
-    int i;
+#ifndef PSP
+    int i, mask=0xff;
+    if (!sh && (est->rendstatus & PDRAW_SPR_LO_ON_HI))
+      mask=0x3f; // accurate sprites, upper bits are priority stuff
 
     for (i = 0; i < len; i++)
-      pd[i] = pal[ps[i]];
+      pd[i] = pal[ps[i] & mask] | 0xff;
 #else
     extern void amips_clut(unsigned short *dst, unsigned char *src, unsigned short *pal, int count);
     extern void amips_clut_6bit(unsigned short *dst, unsigned char *src, unsigned short *pal, int count);
-    if (!sh)
+    if (!sh && (est->rendstatus & PDRAW_SPR_LO_ON_HI))
+         amips_clut_6bit(pd, ps, pal, len);
+    else amips_clut(pd, ps, pal, len);
+#endif
+  }
+}
+*/
+
+void FinalizeLine555(int sh, int line, struct PicoEState *est)
+{
+  unsigned int   *pd=est->DrawLineDest;
+  unsigned char  *ps=est->HighCol+8;
+  unsigned short *pal=est->HighPal;
+  int len;
+
+  if (Pico.m.dirtyPal)
+    PicoDoHighPal555(sh, line, est);
+
+  if (Pico.video.reg[12]&1) {
+    len = 320;
+  } else {
+    if (!(PicoIn.opt&POPT_DIS_32C_BORDER)) pd+=32;
+    len = 256;
+  }
+
+  {
+#ifndef PSP
+    int i, mask=0xff;
+    if (!sh && (est->rendstatus & PDRAW_SPR_LO_ON_HI))
+      mask=0x3f; // accurate sprites, upper bits are priority stuff
+
+    for (i = 0; i < len; i++)
+      pd[i] = ((ps[i] & mask) << 8) | 0x0000001;
+#else
+    extern void amips_clut(unsigned short *dst, unsigned char *src, unsigned short *pal, int count);
+    extern void amips_clut_6bit(unsigned short *dst, unsigned char *src, unsigned short *pal, int count);
+    if (!sh && (est->rendstatus & PDRAW_SPR_LO_ON_HI))
          amips_clut_6bit(pd, ps, pal, len);
     else amips_clut(pd, ps, pal, len);
 #endif

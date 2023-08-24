@@ -5,6 +5,8 @@
  * This work is licensed under the terms of MAME license.
  * See COPYING file in the top-level directory.
  */
+
+/*
 #define _GNU_SOURCE
 #include <stdio.h>
 
@@ -413,3 +415,4 @@ void pdb_cleanup(void)
 }
 
 // vim:shiftwidth=2:expandtab
+*/

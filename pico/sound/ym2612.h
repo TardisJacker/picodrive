@@ -99,6 +99,10 @@ typedef struct
 	int		TBT;		/* timer b ticker | need_save */
 	/* local time tables */
 	INT32	dt_tab[8][32];/* DeTune table       */
+
+	// For 3DS.
+	UINT8	address_internal;	/* 10 address register | need_save     */
+	UINT8	mode_internal;		/* mode  CSM / 3SLOT    */
 } FM_ST;
 
 /***********************************************************/
@@ -147,6 +151,7 @@ typedef struct
 	FM_OPN		OPN;				/* OPN state            */
 
 	UINT32		slot_mask;			/* active slot mask (performance hack) */
+	INT32		addr_A1_internal;	/* address line A1 | need_save       */
 } YM2612;
 #endif
 

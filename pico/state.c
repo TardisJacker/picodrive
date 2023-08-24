@@ -7,7 +7,7 @@
  */
 
 #include "pico_int.h"
-#include <zlib.h>
+//#include <zlib.h>
 
 #include "../cpu/sh2/sh2.h"
 #include "sound/ym2612.h"
@@ -28,6 +28,7 @@ void (*PicoLoadStateHook)(void);
 
 
 /* I/O functions */
+/*
 static size_t gzRead2(void *p, size_t _size, size_t _n, void *file)
 {
   return gzread(file, p, _size * _n);
@@ -37,16 +38,18 @@ static size_t gzWrite2(void *p, size_t _size, size_t _n, void *file)
 {
   return gzwrite(file, p, _size * _n);
 }
+*/
 
 static void set_cbs(int gz)
 {
-  if (gz) {
+  /*if (gz) {
     areaRead  = gzRead2;
     areaWrite = gzWrite2;
     areaEof   = (areaeof *) gzeof;
     areaSeek  = (areaseek *) gzseek;
     areaClose = (areaclose *) gzclose;
-  } else {
+  } else*/ 
+  {
     areaRead  = (arearw *) fread;
     areaWrite = (arearw *) fwrite;
     areaEof   = (areaeof *) feof;
@@ -60,7 +63,7 @@ static void *open_save_file(const char *fname, int is_save)
   int len = strlen(fname);
   void *afile = NULL;
 
-  if (len > 3 && strcmp(fname + len - 3, ".gz") == 0)
+  /*if (len > 3 && strcmp(fname + len - 3, ".gz") == 0)
   {
     if ( (afile = gzopen(fname, is_save ? "wb" : "rb")) ) {
       set_cbs(1);
@@ -68,7 +71,7 @@ static void *open_save_file(const char *fname, int is_save)
         gzsetparams(afile, 9, Z_DEFAULT_STRATEGY);
     }
   }
-  else
+  else*/
   {
     if ( (afile = fopen(fname, is_save ? "wb" : "rb")) ) {
       set_cbs(0);

@@ -13,6 +13,13 @@
 #include "sound/ym2612.h"
 #include "sound/sn76496.h"
 
+#include "../3ds/3dssoundqueue.h"
+
+extern SSoundQueue soundQueue;
+extern SDACQueue dacQueue;
+extern void debugWait();
+#define DEBUG_WAIT_L_KEY debugWait();
+
 extern unsigned int lastSSRamWrite; // used by serial eeprom code
 
 uptr m68k_read8_map  [0x1000000 >> M68K_MEM_SHIFT];
@@ -270,12 +277,7 @@ static NOINLINE u32 port_read(int i)
   u32 in, out;
 
   out = data_reg & ctrl_reg;
-
-  // pull-ups: should be 0x7f, but Decap Attack has a bug where it temp.
-  // disables output before doing TH-low read, so don't emulate it for TH.
-  // Decap Attack reportedly doesn't work on Nomad but works on must
-  // other MD revisions (different pull-up strength?).
-  out |= 0x3f & ~ctrl_reg;
+  out |= 0x7f & ~ctrl_reg; // pull-ups
 
   in = port_readers[i](i, out);
 
@@ -837,10 +839,10 @@ PICO_INTERNAL void PicoMemSetup(void)
     int i;
     // by default, point everything to first 64k of ROM
     for (i = 0; i < M68K_FETCHBANK1 * 0xe0 / 0x100; i++)
-      PicoCpuFM68k.Fetch[i] = (uptr)Pico.rom - (i<<(24-FAMEC_FETCHBITS));
+      PicoCpuFM68k.Fetch[i] = (unsigned long)Pico.rom - (i<<(24-FAMEC_FETCHBITS));
     // now real ROM
     for (i = 0; i < M68K_FETCHBANK1 && (i<<(24-FAMEC_FETCHBITS)) < Pico.romsize; i++)
-      PicoCpuFM68k.Fetch[i] = (uptr)Pico.rom;
+      PicoCpuFM68k.Fetch[i] = (unsigned long)Pico.rom;
     // RAM already set
   }
 #endif
@@ -937,6 +939,148 @@ void ym2612_sync_timers(int z80_cycles, int mode_old, int mode_new)
     elprintf(EL_YMTIMER, "timer b upd to %i @ %i", Pico.t.timer_b_next_oflow>>8, z80_cycles);
 }
 
+extern int picoFrameCounter;
+extern int picoSoundBlockCounter;
+
+// For 3DS
+// ym2612 DAC and timer I/O handlers for z80
+static int ym2612_write_local(u32 a, u32 d, int is_from_z80)
+{
+  int addr;
+  int lines = Pico.m.pal ? 313 : 262;
+
+  a &= 3;
+  if (a == 1 && ym2612.OPN.ST.address == 0x2a) /* DAC data */
+  {
+    int scanline = get_scanline(is_from_z80);
+    //elprintf(EL_STATUS, "%03i -> %03i dac w %08x z80 %i", Pico.snd.dac_line, scanline, d, is_from_z80);
+    ym2612.dacout = ((int)d - 0x80) << 6;
+    if (ym2612.dacen)
+      PsndDoDAC(scanline);
+    return 0;
+  }
+
+/*
+if (!(a == 0 && d == 0x2a))
+{
+printf ("ym2612 %04x <- %02x (%d)\n", a, d, get_scanline(is_from_z80));
+DEBUG_WAIT_L_KEY
+}
+*/
+#define BLOCKS_PER_LOOP 2
+
+  switch (a)
+  {
+    case 0: /* address port 0 */
+      ym2612.OPN.ST.address = d;
+      ym2612.addr_A1 = 0;
+      return 0;
+
+    case 1: /* data port 0    */
+      if (ym2612.addr_A1 != 0)
+        return 0;
+
+      addr = ym2612.OPN.ST.address;
+      ym2612.REGS[addr] = d;
+
+      switch (addr)
+      {
+        case 0x24: // timer A High 8
+        case 0x25: { // timer A Low 2
+          int TAnew = (addr == 0x24) ? ((ym2612.OPN.ST.TA & 0x03)|(((int)d)<<2))
+                                     : ((ym2612.OPN.ST.TA & 0x3fc)|(d&3));
+          if (ym2612.OPN.ST.TA != TAnew)
+          {
+            //elprintf(EL_STATUS, "timer a set %i", TAnew);
+            ym2612.OPN.ST.TA = TAnew;
+            //ym2612.OPN.ST.TAC = (1024-TAnew)*18;
+            //ym2612.OPN.ST.TAT = 0;
+            Pico.t.timer_a_step = TIMER_A_TICK_ZCYCLES * (1024 - TAnew);
+            if (ym2612.OPN.ST.mode & 1) {
+              // this is not right, should really be done on overflow only
+              int cycles = is_from_z80 ? z80_cyclesDone() : z80_cycles_from_68k();
+              Pico.t.timer_a_next_oflow = (cycles << 8) + Pico.t.timer_a_step;
+            }
+            elprintf(EL_YMTIMER, "timer a set to %i, %i", 1024 - TAnew, Pico.t.timer_a_next_oflow>>8);
+          }
+          return 0;
+        }
+        case 0x26: // timer B
+          if (ym2612.OPN.ST.TB != d) {
+            //elprintf(EL_STATUS, "timer b set %i", d);
+            ym2612.OPN.ST.TB = d;
+            //ym2612.OPN.ST.TBC = (256-d) * 288;
+            //ym2612.OPN.ST.TBT  = 0;
+            Pico.t.timer_b_step = TIMER_B_TICK_ZCYCLES * (256 - d); // 262800
+            if (ym2612.OPN.ST.mode & 2) {
+              int cycles = is_from_z80 ? z80_cyclesDone() : z80_cycles_from_68k();
+              Pico.t.timer_b_next_oflow = (cycles << 8) + Pico.t.timer_b_step;
+            }
+            elprintf(EL_YMTIMER, "timer b set to %i, %i", 256 - d, Pico.t.timer_b_next_oflow>>8);
+          }
+          return 0;
+        case 0x27: { /* mode, timer control */
+          int old_mode = ym2612.OPN.ST.mode;
+          int cycles = is_from_z80 ? z80_cyclesDone() : z80_cycles_from_68k();
+          ym2612.OPN.ST.mode = d;
+
+          elprintf(EL_YMTIMER, "st mode %02x", d);
+          ym2612_sync_timers(cycles, old_mode, d);
+
+          /* reset Timer a flag */
+          if (d & 0x10)
+            ym2612.OPN.ST.status &= ~1;
+
+          /* reset Timer b flag */
+          if (d & 0x20)
+            ym2612.OPN.ST.status &= ~2;
+
+          soundQueueAdd(&soundQueue, picoSoundBlockCounter, 0, 0, ym2612.OPN.ST.address);
+          soundQueueAdd(&soundQueue, picoSoundBlockCounter, 0, 1, d);
+
+          if ((d ^ old_mode) & 0xc0) {
+            return 1;
+          }
+          return 0;
+        }
+        case 0x2b: { /* DAC Sel  (YM2612) */
+          int scanline = get_scanline(is_from_z80);
+          if (ym2612.dacen != (d & 0x80)) {
+            ym2612.dacen = d & 0x80;
+            Pico.snd.dac_line = scanline;
+          }
+          return 0;
+        }
+      } 
+
+      soundQueueAdd(&soundQueue, picoSoundBlockCounter, 0, 0, ym2612.OPN.ST.address);
+      soundQueueAdd(&soundQueue, picoSoundBlockCounter, 0, 1, d);
+      //printf ("ym2612 %02x <- %02x (%d, %d)\n", ym2612.OPN.ST.address, d, is_from_z80, get_scanline(is_from_z80));
+      break;
+
+    case 2: /* address port 1 */
+      ym2612.OPN.ST.address = d;
+      ym2612.addr_A1 = 1;
+      return 0;
+
+    case 3: /* data port 1    */
+      if (ym2612.addr_A1 != 1)
+        return 0;
+
+      addr = ym2612.OPN.ST.address | 0x100;
+      ym2612.REGS[addr] = d;
+
+      soundQueueAdd(&soundQueue, picoSoundBlockCounter, 0, 2, ym2612.OPN.ST.address);
+      soundQueueAdd(&soundQueue, picoSoundBlockCounter, 0, 3, d);
+      //printf ("ym2612 %02x <- %02x (%d, %d)\n", ym2612.OPN.ST.address, d, is_from_z80, get_scanline(is_from_z80));
+      break;
+  }
+
+  return 1;
+  //return YM2612Write_(a, d);
+}
+
+#ifdef ORIGINAL
 // ym2612 DAC and timer I/O handlers for z80
 static int ym2612_write_local(u32 a, u32 d, int is_from_z80)
 {
@@ -952,6 +1096,12 @@ static int ym2612_write_local(u32 a, u32 d, int is_from_z80)
       PsndDoDAC(scanline);
     return 0;
   }
+
+if (!(a == 0 && d == 0x2a))
+{
+printf ("ym2612 %04x <- %02x (%d)\n", a, d, get_scanline(is_from_z80));
+DEBUG_WAIT_L_KEY
+}
 
   switch (a)
   {
@@ -1065,9 +1215,11 @@ static int ym2612_write_local(u32 a, u32 d, int is_from_z80)
   if (PicoIn.opt & POPT_EXT_FM)
     return YM2612Write_940(a, d, get_scanline(is_from_z80));
 #endif
-  return YM2612Write_(a, d);
-}
 
+
+  //return YM2612Write_(a, d);
+}
+#endif
 
 #define ym2612_read_local() \
   if (xcycles >= Pico.t.timer_a_next_oflow) \

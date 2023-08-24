@@ -50,6 +50,13 @@ PICO_INTERNAL void PicoPowerMCD(void)
   Pico_mcd->m.busreq = 2;     // busreq on, s68k in reset
   Pico_mcd->s68k_regs[3] = 1; // 2M word RAM mode, m68k access
   memset(Pico_mcd->bios + 0x70, 0xff, 4);
+
+  // 3DS Bug fix. Otherwise CD games can crash!
+  Pico_mcd->cdda_stream = NULL;
+  Pico_mcd->pcm_mixpos = 0;
+
+  // clear the PCM mix buffer
+  memset(Pico_mcd->pcm_mixbuf, 0, sizeof(Pico_mcd->pcm_mixbuf));
 }
 
 void pcd_soft_reset(void)
@@ -85,6 +92,10 @@ PICO_INTERNAL int PicoResetMCD(void)
     Pico.sv.data = NULL;
   }
   Pico.sv.start = Pico.sv.end = 0; // unused
+
+  // clear buffers
+  memset(Pico_mcd->pcm_mixbuf, 0, sizeof(Pico_mcd->pcm_mixbuf));
+  Pico_mcd->pcm_mixpos = 0;
 
   return 0;
 }
@@ -352,7 +363,7 @@ void pcd_run_cpus_lockstep(int m68k_cycles)
 #define CPUS_RUN(m68k_cycles) \
   pcd_run_cpus(m68k_cycles)
 
-#include "../pico_cmn.c"
+#include "../pico_cmn.h"
 
 
 void pcd_prepare_frame(void)
